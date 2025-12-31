@@ -1,0 +1,68 @@
+name: 抓取当日用餐人数并推送到企业微信（Playwright版）
+
+on:
+  schedule:
+    - cron: '0 0 * * *'          # UTC 01:00 = 北京时间 09:00
+  workflow_dispatch:
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Python 依赖
+        run: |
+          pip install playwright beautifulsoup4 lxml
+          playwright install chromium
+
+      - name: 抓取并推送
+        env:
+          WECOM_WEBHOOK_KEY: ${{ secrets.WECOM_WEBHOOK_KEY }}
+          LUNCH_URL:         ${{ secrets.LUNCH_URL }}
+        shell: python
+        run: |
+          import os, json, requests, sys
+          from playwright.sync_api import sync_playwright
+          from bs4 import BeautifulSoup
+
+          key     = os.getenv('WECOM_WEBHOOK_KEY')
+          url     = os.getenv('LUNCH_URL')
+          webhook = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}"
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True)
+              page    = browser.new_page()
+              try:
+                  page.goto(url, wait_until="networkidle", timeout=30000)
+                  page.wait_for_timeout(5000)
+                  html = page.content()
+              except Exception as e:
+                  print('❌ 打开页面失败:', e)
+                  sys.exit(1)
+              finally:
+                  browser.close()
+
+          soup = BeautifulSoup(html, "lxml")
+          box  = soup.select_one('div.stats-box')
+          if not box:
+              print('⚠️  页面中找不到 div.stats-box，前 1000 字符：')
+              print(html[:1000])
+              sys.exit(1)
+
+          num   = box.find('div')
+          title = box.find('h3')
+          if not num or not title:
+              print('⚠️  stats-box 内缺少 div 或 h3')
+              sys.exit(1)
+
+          md = f"**📊 {title.get_text(strip=True)}**\n---> **{num.get_text(strip=True)}** 人"
+          payload = {"msgtype": "markdown", "markdown": {"content": md}}
+
+          try:
+              resp = requests.post(webhook, json=payload, timeout=10)
+              resp.raise_for_status()
+              print('✅ 推送成功:', resp.text)
+          except Exception as e:
+              print('❌ 推送失败:', e)
+              sys.exit(1)
