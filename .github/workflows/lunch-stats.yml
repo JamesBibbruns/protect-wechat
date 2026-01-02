@@ -56,7 +56,7 @@ jobs:
               print('⚠️  stats-box 内缺少 div 或 h3')
               sys.exit(1)
 
-          md = f"**📊 {title.get_text(strip=True)}**\n---> **{num.get_text(strip=True)}** 人"
+          md = f"截止今日8:00**📊 {title.get_text(strip=True)}**\n---> **{num.get_text(strip=True)}** 人"
           payload = {"msgtype": "markdown", "markdown": {"content": md}}
 
           try:
