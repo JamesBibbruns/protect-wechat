@@ -2,7 +2,7 @@ name: 抓取当日用餐人数并推送到企业微信（Playwright版）
 
 on:
   schedule:
-    - cron: '30 23 * * *'          # UTC 01:00 = 北京时间 07:30
+    - cron: '0 0 * * *'          # UTC 01:00 = 北京时间 08:00
   workflow_dispatch:
 
 jobs:
