@@ -2,67 +2,46 @@ name: 抓取当日用餐人数并推送到企业微信（Playwright版）
 
 on:
   schedule:
-    - cron: '0 0 * * *'          # UTC 01:00 = 北京时间 08:00
+    - cron: '15 1 * * *'          # UTC 01:15 = 北京时间 09:15（避开整点）
   workflow_dispatch:
 
 jobs:
   stats:
     runs-on: ubuntu-latest
+    timeout-minutes: 10            # 整体超时控制
+    
     steps:
       - uses: actions/checkout@v4
 
+      # 优化1: 使用缓存加速依赖安装
+      - name: 设置 Python 缓存
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
       - name: 安装 Python 依赖
         run: |
-          pip install playwright beautifulsoup4 lxml
-          playwright install chromium
+          pip install playwright beautifulsoup4 lxml requests
+          # 优化2: 只安装 chromium，跳过依赖检查加速
+          playwright install chromium --with-deps
 
+      # 优化3: 缓存 Playwright 浏览器
+      - name: 缓存 Playwright 浏览器
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('**/requirements.txt') }}
+        # 如果缓存命中，跳过浏览器安装
+          
+      - name: 安装 Playwright 浏览器（如未缓存）
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: playwright install chromium --with-deps
+
+      # 优化4: 分离脚本便于维护，并增加错误处理
       - name: 抓取并推送
         env:
           WECOM_WEBHOOK_KEY: ${{ secrets.WECOM_WEBHOOK_KEY }}
-          LUNCH_URL:         ${{ secrets.LUNCH_URL }}
-        shell: python
-        run: |
-          import os, json, requests, sys
-          from playwright.sync_api import sync_playwright
-          from bs4 import BeautifulSoup
-
-          key     = os.getenv('WECOM_WEBHOOK_KEY')
-          url     = os.getenv('LUNCH_URL')
-          webhook = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}"
-
-          with sync_playwright() as p:
-              browser = p.chromium.launch(headless=True)
-              page    = browser.new_page()
-              try:
-                  page.goto(url, wait_until="networkidle", timeout=30000)
-                  page.wait_for_timeout(5000)
-                  html = page.content()
-              except Exception as e:
-                  print('❌ 打开页面失败:', e)
-                  sys.exit(1)
-              finally:
-                  browser.close()
-
-          soup = BeautifulSoup(html, "lxml")
-          box  = soup.select_one('div.stats-box')
-          if not box:
-              print('⚠️  页面中找不到 div.stats-box，前 1000 字符：')
-              print(html[:1000])
-              sys.exit(1)
-
-          num   = box.find('div')
-          title = box.find('h3')
-          if not num or not title:
-              print('⚠️  stats-box 内缺少 div 或 h3')
-              sys.exit(1)
-
-          md = f"截止今日8:00**📊 {title.get_text(strip=True)}**\n---> **{num.get_text(strip=True)}** 人"
-          payload = {"msgtype": "markdown", "markdown": {"content": md}}
-
-          try:
-              resp = requests.post(webhook, json=payload, timeout=10)
-              resp.raise_for_status()
-              print('✅ 推送成功:', resp.text)
-          except Exception as e:
-              print('❌ 推送失败:', e)
-              sys.exit(1)
+          LUNCH_URL: ${{ secrets.LUNCH_URL }}
+        run: python scripts/fetch_lunch_stats.py
