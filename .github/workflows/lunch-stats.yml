@@ -2,77 +2,60 @@ name: 抓取当日用餐人数并推送到企业微信（Playwright版）
 
 on:
   schedule:
-    - cron: '15 1 * * *'          # UTC 01:15 = 北京时间 09:15（避开整点高峰）
+    - cron: '0 0 * * *'          # UTC 01:00 = 北京时间 08:00
   workflow_dispatch:
 
 jobs:
   stats:
     runs-on: ubuntu-latest
-    timeout-minutes: 5             # 缩短超时，快速失败
-    
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装依赖
+      - name: 安装 Python 依赖
         run: |
-          pip install playwright beautifulsoup4 lxml requests
-          # 只装 chromium，用系统依赖（--with-deps 更快）
-          playwright install chromium --with-deps
-
+          pip install playwright beautifulsoup4 lxml
+          playwright install chromium
       - name: 抓取并推送
         env:
           WECOM_WEBHOOK_KEY: ${{ secrets.WECOM_WEBHOOK_KEY }}
-          LUNCH_URL: ${{ secrets.LUNCH_URL }}
+          LUNCH_URL:         ${{ secrets.LUNCH_URL }}
         shell: python
         run: |
-          import os, requests, sys
+          import os, json, requests, sys
           from playwright.sync_api import sync_playwright
           from bs4 import BeautifulSoup
-
-          key = os.getenv('WECOM_WEBHOOK_KEY', '').strip()
-          url = os.getenv('LUNCH_URL')
-          # 修复：去掉 key= 后面的空格
+          key     = os.getenv('WECOM_WEBHOOK_KEY')
+          url     = os.getenv('LUNCH_URL')
           webhook = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}"
-
           with sync_playwright() as p:
-              # 优化：轻量启动参数，更快
-              browser = p.chromium.launch(
-                  headless=True,
-                  args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-              )
-              page = browser.new_page()
+              browser = p.chromium.launch(headless=True)
+              page    = browser.new_page()
               try:
-                  # 优化：domcontentloaded 比 networkidle 更快
-                  page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                  # 优化：等具体元素而非固定5秒
-                  page.wait_for_selector('div.stats-box', timeout=10000)
+                  page.goto(url, wait_until="networkidle", timeout=30000)
+                  page.wait_for_timeout(5000)
                   html = page.content()
               except Exception as e:
                   print('❌ 打开页面失败:', e)
                   sys.exit(1)
               finally:
                   browser.close()
-
           soup = BeautifulSoup(html, "lxml")
-          box = soup.select_one('div.stats-box')
+          box  = soup.select_one('div.stats-box')
           if not box:
-              print('⚠️ 找不到 div.stats-box')
+              print('⚠️  页面中找不到 div.stats-box，前 1000 字符：')
+              print(html[:1000])
               sys.exit(1)
-
-          num = box.find('div')
+          num   = box.find('div')
           title = box.find('h3')
           if not num or not title:
-              print('⚠️ 缺少 div 或 h3')
+              print('⚠️  stats-box 内缺少 div 或 h3')
               sys.exit(1)
-
-          # 简化消息格式，避免 YAML 多行问题
-          md = f"**📊 {title.get_text(strip=True)}**\n> **{num.get_text(strip=True)}** 人"
+          md = f"截止今日8:00**📊 {title.get_text(strip=True)}**\n---> **{num.get_text(strip=True)}** 人"
           payload = {"msgtype": "markdown", "markdown": {"content": md}}
-
           try:
               resp = requests.post(webhook, json=payload, timeout=10)
               resp.raise_for_status()
-              print('✅ 推送成功')
+              print('✅ 推送成功:', resp.text)
           except Exception as e:
               print('❌ 推送失败:', e)
               sys.exit(1)
